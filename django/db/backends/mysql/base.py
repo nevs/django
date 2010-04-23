@@ -173,6 +173,16 @@ class DatabaseOperations(BaseDatabaseOperations):
             return name # Quoting once is enough.
         return "`%s`" % name
 
+    def prep_db_table(self, db_schema, db_table):
+        qn = self.quote_name
+        if db_schema:
+            return "%s.%s" % (qn(db_schema), qn(db_table))
+        else:
+            return qn(db_table)
+
+    def prep_db_index(self, db_schema, db_index):
+        return self.prep_db_table(db_schema, db_index)
+
     def random_function_sql(self):
         return 'RAND()'
 
@@ -182,19 +192,22 @@ class DatabaseOperations(BaseDatabaseOperations):
         # to clear all tables of all data
         if tables:
             sql = ['SET FOREIGN_KEY_CHECKS = 0;']
-            for table in tables:
-                sql.append('%s %s;' % (style.SQL_KEYWORD('TRUNCATE'), style.SQL_FIELD(self.quote_name(table))))
+            for (schema, table) in tables:
+                sql.append('%s %s;' % (style.SQL_KEYWORD('TRUNCATE'), style.SQL_FIELD(self.prep_db_table(schema, table))))
             sql.append('SET FOREIGN_KEY_CHECKS = 1;')
 
             # 'ALTER TABLE table AUTO_INCREMENT = 1;'... style SQL statements
             # to reset sequence indices
-            sql.extend(["%s %s %s %s %s;" % \
-                (style.SQL_KEYWORD('ALTER'),
-                 style.SQL_KEYWORD('TABLE'),
-                 style.SQL_TABLE(self.quote_name(sequence['table'])),
-                 style.SQL_KEYWORD('AUTO_INCREMENT'),
-                 style.SQL_FIELD('= 1'),
-                ) for sequence in sequences])
+            for sequence_info in sequences:
+                schema_name = sequence_info['schema']
+                table_name = self.prep_db_table(schema_name, sequence_info['table'])
+                sql.append("%s %s %s %s %s;" % \
+                           (style.SQL_KEYWORD('ALTER'),
+                            style.SQL_KEYWORD('TABLE'),
+                            style.SQL_TABLE(table_name),
+                            style.SQL_KEYWORD('AUTO_INCREMENT'),
+                            style.SQL_FIELD('= 1'),
+                            ))
             return sql
         else:
             return []

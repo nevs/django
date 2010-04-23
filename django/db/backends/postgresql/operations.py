@@ -53,8 +53,10 @@ class DatabaseOperations(BaseDatabaseOperations):
             return 'HOST(%s)'
         return '%s'
 
-    def last_insert_id(self, cursor, table_name, pk_name):
-        cursor.execute("SELECT CURRVAL('\"%s_%s_seq\"')" % (table_name, pk_name))
+    def last_insert_id(self, cursor, schema_name, table_name, pk_name):
+        sequence_name = '%s_%s_seq' % (table_name, pk_name)
+        sequence_name = self.prep_db_table(schema_name, sequence_name)
+        cursor.execute("SELECT CURRVAL('%s')" % sequence_name)
         return cursor.fetchone()[0]
 
     def no_limit_value(self):
@@ -65,8 +67,17 @@ class DatabaseOperations(BaseDatabaseOperations):
             return name # Quoting once is enough.
         return '"%s"' % name
 
+    def prep_db_table(self, db_schema, db_table):
+        qn = self.quote_name
+        if db_schema:
+            return "%s.%s" % (qn(db_schema), qn(db_table))
+        else:
+            return qn(db_table)
+
     def sql_flush(self, style, tables, sequences):
         if tables:
+            qnames = [self.prep_db_table(schema, table)
+                      for (schema, table) in tables]
             if self.postgres_version[0:2] >= (8,1):
                 # Postgres 8.1+ can do 'TRUNCATE x, y, z...;'. In fact, it *has to*
                 # in order to be able to truncate tables referenced by a foreign
@@ -74,7 +85,7 @@ class DatabaseOperations(BaseDatabaseOperations):
                 # statement.
                 sql = ['%s %s;' % \
                     (style.SQL_KEYWORD('TRUNCATE'),
-                     style.SQL_FIELD(', '.join([self.quote_name(table) for table in tables]))
+                     style.SQL_FIELD(', '.join(qnames))
                 )]
             else:
                 # Older versions of Postgres can't do TRUNCATE in a single call, so
@@ -82,21 +93,23 @@ class DatabaseOperations(BaseDatabaseOperations):
                 sql = ['%s %s %s;' % \
                         (style.SQL_KEYWORD('DELETE'),
                          style.SQL_KEYWORD('FROM'),
-                         style.SQL_FIELD(self.quote_name(table))
-                         ) for table in tables]
+                         style.SQL_FIELD(qname)
+                         ) for qname in qnames]
 
             # 'ALTER SEQUENCE sequence_name RESTART WITH 1;'... style SQL statements
             # to reset sequence indices
             for sequence_info in sequences:
+                schema_name = sequence_info['schema']
                 table_name = sequence_info['table']
                 column_name = sequence_info['column']
                 if column_name and len(column_name) > 0:
                     sequence_name = '%s_%s_seq' % (table_name, column_name)
                 else:
                     sequence_name = '%s_id_seq' % table_name
+                sequence_name = self.prep_db_table(schema_name, sequence_name)
                 sql.append("%s setval('%s', 1, false);" % \
                     (style.SQL_KEYWORD('SELECT'),
-                    style.SQL_FIELD(self.quote_name(sequence_name)))
+                    style.SQL_FIELD(sequence_name))
                 )
             return sql
         else:
@@ -112,25 +125,32 @@ class DatabaseOperations(BaseDatabaseOperations):
             # if there are records (as the max pk value is already in use), otherwise set it to false.
             for f in model._meta.local_fields:
                 if isinstance(f, models.AutoField):
+                    sequence_name = qn('%s_%s_seq' % (model._meta.db_table,
+                                                      f.column)) # XXX: generic schemas support
+                    sequence_name = self.prep_db_table(model._meta.db_schema,
+                                                       sequence_name)
                     output.append("%s setval('%s', coalesce(max(%s), 1), max(%s) %s null) %s %s;" % \
                         (style.SQL_KEYWORD('SELECT'),
-                        style.SQL_FIELD(qn('%s_%s_seq' % (model._meta.db_table, f.column))),
+                        style.SQL_FIELD(sequence_name),
                         style.SQL_FIELD(qn(f.column)),
                         style.SQL_FIELD(qn(f.column)),
                         style.SQL_KEYWORD('IS NOT'),
                         style.SQL_KEYWORD('FROM'),
-                        style.SQL_TABLE(qn(model._meta.db_table))))
+                        style.SQL_TABLE(model._meta.qualified_name)))
                     break # Only one AutoField is allowed per model, so don't bother continuing.
             for f in model._meta.many_to_many:
                 if not f.rel.through:
+                    sequence_name = qn('%s_id_seq' % f.m2m_db_table()) # XXX: generic schemas support
+                    sequence_name = self.prep_db_table(f.m2m_db_schema(),
+                                                       sequence_name)
                     output.append("%s setval('%s', coalesce(max(%s), 1), max(%s) %s null) %s %s;" % \
                         (style.SQL_KEYWORD('SELECT'),
-                        style.SQL_FIELD(qn('%s_id_seq' % f.m2m_db_table())),
+                        style.SQL_FIELD(sequence_name),
                         style.SQL_FIELD(qn('id')),
                         style.SQL_FIELD(qn('id')),
                         style.SQL_KEYWORD('IS NOT'),
                         style.SQL_KEYWORD('FROM'),
-                        style.SQL_TABLE(qn(f.m2m_db_table()))))
+                        style.SQL_TABLE(qn(f.m2m_qualified_name()))))
         return output
 
     def savepoint_create_sql(self, sid):

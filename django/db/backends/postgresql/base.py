@@ -80,6 +80,7 @@ class UnicodeCursorWrapper(object):
 
 class DatabaseFeatures(BaseDatabaseFeatures):
     uses_savepoints = True
+    default_schema_name = u'public'
 
 class DatabaseWrapper(BaseDatabaseWrapper):
     operators = {

@@ -8,6 +8,12 @@ from django.core.management.sql import custom_sql_for_model, emit_post_sync_sign
 from django.db import connections, router, transaction, models, DEFAULT_DB_ALIAS
 from django.utils.importlib import import_module
 
+def log(s):
+    l = open('/home/ramiro/django/t6148/salida.sql', 'a')
+    try:
+        l.write(s)
+    finally:
+        l.close()
 
 class Command(NoArgsCommand):
     option_list = NoArgsCommand.option_list + (
@@ -50,9 +56,26 @@ class Command(NoArgsCommand):
         connection = connections[db]
         cursor = connection.cursor()
 
+        #log('-- ===== DB: %s\n' % connection.settings_dict['NAME'])
         # Get a list of already installed *models* so that references work right.
-        tables = connection.introspection.table_names()
+        schemas = connection.introspection.schema_names()
+        if schemas:
+            tables = []
+            default_schema_name = connection.features.default_schema_name
+            for schema in connection.introspection.schema_names():
+               if default_schema_name and schema == default_schema_name:
+                   sn = ''
+               else:
+                   sn = schema
+               for tn in connection.introspection.schema_table_names(schema):
+                   tables.append((sn, tn))
+        else:
+            tables = [('', tn) for tn in connection.introspection.table_names()]
+        #tablesx = [x for x in tables]
+        #tablesx.sort()
+        #log('-- Creating tables list (%d): %s\n' % (len(tables), tablesx))
         seen_models = connection.introspection.installed_models(tables)
+        seen_schemas = set()
         created_models = set()
         pending_references = {}
 
@@ -63,11 +86,23 @@ class Command(NoArgsCommand):
                 if router.allow_syncdb(db, m)])
             for app in models.get_apps()
         )
+
+        def model_schema(model):
+            db_schema = model._meta.db_schema
+            if db_schema:
+                db_schema = connection.introspection.table_name_converter(db_schema)
+            return db_schema
+
         def model_installed(model):
             opts = model._meta
             converter = connection.introspection.table_name_converter
-            return not ((converter(opts.db_table) in tables) or
-                (opts.auto_created and converter(opts.auto_created._meta.db_table) in tables))
+            db_schema = model_schema(model)
+            schema_table = (db_schema, converter(opts.db_table))
+            return not ((schema_table in tables) or
+                (opts.auto_created and \
+                 (db_schema, converter(opts.auto_created._meta.db_table)) in tables)
+                 #(model_schema(opts.auto_created), converter(opts.auto_created._meta.db_table)) in tables)
+             )
 
         manifest = dict(
             (app_name, filter(model_installed, model_list))
@@ -76,7 +111,17 @@ class Command(NoArgsCommand):
 
         # Create the tables for each model
         for app_name, model_list in manifest.items():
+            #log('-- app: %s\n' % app_name)
             for model in model_list:
+                # Add model-defined schema tables if any.
+                db_schema = model_schema(model)
+                #log('-- (schemas) db_schema: %s\n' % db_schema)
+                if db_schema and db_schema not in seen_schemas:
+                    #log('-- (schemas) appending to tables list: %s\n' % [(db_schema, tn) for tn in connection.introspection.schema_table_names(db_schema)])
+                    tables += [(db_schema, tn) for tn in
+                               connection.introspection.schema_table_names(db_schema)]
+                    seen_schemas.add(db_schema)
+
                 # Create the model's database table, if it doesn't already exist.
                 if verbosity >= 2:
                     print "Processing %s.%s model" % (app_name, model._meta.object_name)
@@ -89,10 +134,19 @@ class Command(NoArgsCommand):
                         sql.extend(connection.creation.sql_for_pending_references(refto, self.style, pending_references))
                 sql.extend(connection.creation.sql_for_pending_references(model, self.style, pending_references))
                 if verbosity >= 1 and sql:
-                    print "Creating table %s" % model._meta.db_table
+                    if db_schema:
+                        print "Creating table %s.%s" % (db_schema, model._meta.db_table)
+                    else:
+                        print "Creating table %s" % model._meta.db_table
+                #log('%s\n' % ''.join(sql))
                 for statement in sql:
                     cursor.execute(statement)
-                tables.append(connection.introspection.table_name_converter(model._meta.db_table))
+                if sql:
+                    #log('-- appending to tables list: %s\n' % str((db_schema, connection.introspection.table_name_converter(model._meta.db_table))))
+                    tables.append((db_schema, connection.introspection.table_name_converter(model._meta.db_table)))
+                #tablesx2 = [x for x in tables]
+                #tablesx2.sort()
+                #log('-- now (%d): %s\n\n' % (len(tables), tablesx2))
 
 
         transaction.commit_unless_managed(using=db)

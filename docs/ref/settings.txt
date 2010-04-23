@@ -317,6 +317,23 @@ Default: ``''`` (Empty string)
 The port to use when connecting to the database. An empty string means the
 default port. Not used with SQLite.
 
+.. setting:: SCHEMA
+
+SCHEMA
+~~~~~~
+
+.. versionadded:: 1.3
+
+Default: ``''`` (Empty string)
+
+The name of the database schema to use for models. If the backend
+doesn't support multiple schemas, this option is ignored. An empty
+string means the default schema.
+
+If this is used then Django will prefix any table names with the schema name.
+The schema can be overriden on a per-model basis, for details see
+:ref:`db_schema`.
+
 .. setting:: USER
 
 USER

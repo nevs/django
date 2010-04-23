@@ -31,6 +31,24 @@ class DatabaseIntrospection(BaseDatabaseIntrospection):
                 AND pg_catalog.pg_table_is_visible(c.oid)""")
         return [row[0] for row in cursor.fetchall()]
 
+    def get_schema_list(self, cursor):
+        cursor.execute("""
+            SELECT DISTINCT n.nspname
+            FROM pg_catalog.pg_class c
+            LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+            WHERE c.relkind IN ('r', 'v', '')
+            AND n.nspname NOT IN ('pg_catalog', 'pg_toast', 'information_schema')""")
+        return [row[0] for row in cursor.fetchall()]
+
+    def get_schema_table_list(self, cursor, schema):
+        cursor.execute("""
+            SELECT c.relname
+            FROM pg_catalog.pg_class c
+            LEFT JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+            WHERE c.relkind IN ('r', 'v', '')
+                AND n.nspname = '%s'""" % schema)
+        return [row[0] for row in cursor.fetchall()]
+
     def get_table_description(self, cursor, table_name):
         "Returns a description of the table, with the DB-API cursor.description interface."
         cursor.execute("SELECT * FROM %s LIMIT 1" % self.connection.ops.quote_name(table_name))

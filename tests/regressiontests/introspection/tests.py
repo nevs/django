@@ -58,7 +58,7 @@ class IntrospectionTests(TestCase):
 
     def test_sequence_list(self):
         sequences = connection.introspection.sequence_list()
-        expected = {'table': Reporter._meta.db_table, 'column': 'id'}
+        expected = {'table': Reporter._meta.db_table, 'column': 'id', 'schema': ''}
         self.assert_(expected in sequences,
                      'Reporter sequence not found in sequence_list()')
 

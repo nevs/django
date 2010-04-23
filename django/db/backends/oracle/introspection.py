@@ -119,3 +119,26 @@ WHERE  all_tab_cols.column_name = user_cons_columns.column_name (+)
         for row in cursor.fetchall():
             indexes[row[0]] = {'primary_key': row[1], 'unique': row[2]}
         return indexes
+
+    def schema_name_converter(self, name):
+        """Convert to lowercase for case-sensitive schema name comparison."""
+        return name.lower()
+
+    def get_schema_list(self, cursor):
+        "Returns a list of schemas that exist in the database."
+        sql = """
+        select distinct username
+        from all_users, all_objects
+        where username = owner
+        """
+        cursor.execute(sql)
+        return [schema.lower() for (schema,) in cursor]
+
+    def get_schema_table_list(self, cursor, schema):
+        "Returns a list of tables in a specific schema."
+        sql = """
+        select table_name from all_tables
+        where owner = upper(%s)
+        """
+        cursor.execute(sql, [schema])
+        return [table.lower() for (table,) in cursor]

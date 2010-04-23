@@ -98,7 +98,7 @@ class DatabaseOperations(BaseDatabaseOperations):
                 (style.SQL_KEYWORD('DELETE'),
                  style.SQL_KEYWORD('FROM'),
                  style.SQL_FIELD(self.quote_name(table))
-                 ) for table in tables]
+                 ) for (_, table) in tables]
         # Note: No requirement for reset of auto-incremented indices (cf. other
         # sql_flush() implementations). Just return SQL at this point
         return sql

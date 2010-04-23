@@ -58,12 +58,14 @@ class DatabaseFeatures(BaseDatabaseFeatures):
 class DatabaseOperations(BaseDatabaseOperations):
     compiler_module = "django.db.backends.oracle.compiler"
 
-    def autoinc_sql(self, table, column):
+    def autoinc_sql(self, schema, table, column):
         # To simulate auto-incrementing primary keys in Oracle, we have to
         # create a sequence and a trigger.
         sq_name = get_sequence_name(table)
         tr_name = get_trigger_name(table)
-        tbl_name = self.quote_name(table)
+        tbl_name = self.prep_db_table(schema, table)
+        sq_qname = self.prep_db_table(schema, sq_name)
+        tr_qname = self.prep_db_table(schema, tr_name)
         col_name = self.quote_name(column)
         sequence_sql = """
 DECLARE
@@ -72,17 +74,17 @@ BEGIN
     SELECT COUNT(*) INTO i FROM USER_CATALOG
         WHERE TABLE_NAME = '%(sq_name)s' AND TABLE_TYPE = 'SEQUENCE';
     IF i = 0 THEN
-        EXECUTE IMMEDIATE 'CREATE SEQUENCE "%(sq_name)s"';
+        EXECUTE IMMEDIATE 'CREATE SEQUENCE %(sq_qname)s';
     END IF;
 END;
 /""" % locals()
         trigger_sql = """
-CREATE OR REPLACE TRIGGER "%(tr_name)s"
+CREATE OR REPLACE TRIGGER %(tr_qname)s
 BEFORE INSERT ON %(tbl_name)s
 FOR EACH ROW
 WHEN (new.%(col_name)s IS NULL)
     BEGIN
-        SELECT "%(sq_name)s".nextval
+        SELECT %(sq_qname)s.nextval
         INTO :new.%(col_name)s FROM dual;
     END;
 /""" % locals()
@@ -159,8 +161,9 @@ WHEN (new.%(col_name)s IS NULL)
     def deferrable_sql(self):
         return " DEFERRABLE INITIALLY DEFERRED"
 
-    def drop_sequence_sql(self, table):
-        return "DROP SEQUENCE %s;" % self.quote_name(get_sequence_name(table))
+    def drop_sequence_sql(self, schema, table):
+        sequence_name = self.prep_db_table(schema, get_sequence_name(table))
+        return "DROP SEQUENCE %s;" % sequence_name
 
     def fetch_returned_insert_id(self, cursor):
         return long(cursor._insert_id_var.getvalue())
@@ -171,9 +174,9 @@ WHEN (new.%(col_name)s IS NULL)
         else:
             return "%s"
 
-    def last_insert_id(self, cursor, table_name, pk_name):
-        sq_name = get_sequence_name(table_name)
-        cursor.execute('SELECT "%s".currval FROM dual' % sq_name)
+    def last_insert_id(self, cursor, schema_name, table_name, pk_name):
+        sq_name = self.prep_db_table(schema_name, get_sequence_name(table_name))
+        cursor.execute('SELECT %s.currval FROM dual' % sq_name)
         return cursor.fetchone()[0]
 
     def lookup_cast(self, lookup_type):
@@ -183,6 +186,16 @@ WHEN (new.%(col_name)s IS NULL)
 
     def max_name_length(self):
         return 30
+
+    def prep_db_table(self, db_schema, db_table):
+        qn = self.quote_name
+        if db_schema:
+            return "%s.%s" % (qn(db_schema), qn(db_table))
+        else:
+            return qn(db_table)
+
+    def prep_db_index(self, db_schema, db_index):
+        return self.prep_db_table(db_schema, db_index)
 
     def prep_for_iexact_query(self, x):
         return x
@@ -234,27 +247,30 @@ WHEN (new.%(col_name)s IS NULL)
     def sql_flush(self, style, tables, sequences):
         # Return a list of 'TRUNCATE x;', 'TRUNCATE y;',
         # 'TRUNCATE z;'... style SQL statements
+        sql = []
         if tables:
             # Oracle does support TRUNCATE, but it seems to get us into
             # FK referential trouble, whereas DELETE FROM table works.
-            sql = ['%s %s %s;' % \
-                    (style.SQL_KEYWORD('DELETE'),
-                     style.SQL_KEYWORD('FROM'),
-                     style.SQL_FIELD(self.quote_name(table)))
-                    for table in tables]
+            for schema, table in tables:
+                table = self.prep_db_table(schema, table)
+                sql.append('%s %s %s;' % \
+                           (style.SQL_KEYWORD('DELETE'),
+                            style.SQL_KEYWORD('FROM'),
+                            style.SQL_FIELD(table)))
             # Since we've just deleted all the rows, running our sequence
             # ALTER code will reset the sequence to 0.
             for sequence_info in sequences:
-                sequence_name = get_sequence_name(sequence_info['table'])
-                table_name = self.quote_name(sequence_info['table'])
+                schema_name = sequence_info['schema']
+                sequence_name = self.prep_db_table(schema_name,
+                                    get_sequence_name(sequence_info['table']))
+                table_name = self.prep_db_table(schema_name,
+                                                sequence_info['table'])
                 column_name = self.quote_name(sequence_info['column'] or 'id')
                 query = _get_sequence_reset_sql() % {'sequence': sequence_name,
                                                      'table': table_name,
                                                      'column': column_name}
                 sql.append(query)
-            return sql
-        else:
-            return []
+        return sql
 
     def sequence_reset_sql(self, style, model_list):
         from django.db import models
@@ -263,8 +279,9 @@ WHEN (new.%(col_name)s IS NULL)
         for model in model_list:
             for f in model._meta.local_fields:
                 if isinstance(f, models.AutoField):
-                    table_name = self.quote_name(model._meta.db_table)
-                    sequence_name = get_sequence_name(model._meta.db_table)
+                    table_name = model._meta.qualified_name
+                    sequence_name = self.prep_db_table(model._meta.db_schema,
+                                       get_sequence_name(model._meta.db_table))
                     column_name = self.quote_name(f.column)
                     output.append(query % {'sequence': sequence_name,
                                            'table': table_name,
@@ -274,8 +291,9 @@ WHEN (new.%(col_name)s IS NULL)
                     break
             for f in model._meta.many_to_many:
                 if not f.rel.through:
-                    table_name = self.quote_name(f.m2m_db_table())
-                    sequence_name = get_sequence_name(f.m2m_db_table())
+                    table_name = self.quote_name(f.m2m_qualified_name())
+                    sequence_name = self.prep_db_table(f.m2m_db_schema(),
+                                           get_sequence_name(f.m2m_db_table()))
                     column_name = self.quote_name('id')
                     output.append(query % {'sequence': sequence_name,
                                            'table': table_name,
@@ -619,12 +637,12 @@ DECLARE
 BEGIN
     LOCK TABLE %(table)s IN SHARE MODE;
     SELECT NVL(MAX(%(column)s), 0) INTO startvalue FROM %(table)s;
-    SELECT "%(sequence)s".nextval INTO cval FROM dual;
+    SELECT %(sequence)s.nextval INTO cval FROM dual;
     cval := startvalue - cval;
     IF cval != 0 THEN
-        EXECUTE IMMEDIATE 'ALTER SEQUENCE "%(sequence)s" MINVALUE 0 INCREMENT BY '||cval;
-        SELECT "%(sequence)s".nextval INTO cval FROM dual;
-        EXECUTE IMMEDIATE 'ALTER SEQUENCE "%(sequence)s" INCREMENT BY 1';
+        EXECUTE IMMEDIATE 'ALTER SEQUENCE %(sequence)s MINVALUE 0 INCREMENT BY '||cval;
+        SELECT %(sequence)s.nextval INTO cval FROM dual;
+        EXECUTE IMMEDIATE 'ALTER SEQUENCE %(sequence)s INCREMENT BY 1';
     END IF;
     COMMIT;
 END;

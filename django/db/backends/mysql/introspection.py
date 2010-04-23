@@ -33,6 +33,14 @@ class DatabaseIntrospection(BaseDatabaseIntrospection):
         cursor.execute("SHOW TABLES")
         return [row[0] for row in cursor.fetchall()]
 
+    def get_schema_list(self, cursor):
+        cursor.execute("SHOW SCHEMAS")
+        return [row[0] for row in cursor.fetchall()]
+
+    def get_schema_table_list(self, cursor, schema):
+        cursor.execute("SHOW TABLES FROM %s" % self.connection.ops.quote_name(schema))
+        return [schema + "." + row[0] for row in cursor.fetchall()]
+
     def get_table_description(self, cursor, table_name):
         "Returns a description of the table, with the DB-API cursor.description interface."
         cursor.execute("SELECT * FROM %s LIMIT 1" % self.connection.ops.quote_name(table_name))

@@ -96,6 +96,7 @@ class BaseDatabaseFeatures(object):
     # integer primary keys.
     related_fields_match_type = False
     allow_sliced_subqueries = True
+    default_schema_name = ''
 
 class BaseDatabaseOperations(object):
     """
@@ -108,7 +109,7 @@ class BaseDatabaseOperations(object):
     def __init__(self):
         self._cache = {}
 
-    def autoinc_sql(self, table, column):
+    def autoinc_sql(self, schema, table, column):
         """
         Returns any SQL needed to support auto-incrementing primary keys, or
         None if no SQL is necessary.
@@ -154,7 +155,7 @@ class BaseDatabaseOperations(object):
         """
         return "DROP CONSTRAINT"
 
-    def drop_sequence_sql(self, table):
+    def drop_sequence_sql(self, schema, table):
         """
         Returns any SQL necessary to drop the sequence for the given table.
         Returns None if no SQL is necessary.
@@ -215,7 +216,7 @@ class BaseDatabaseOperations(object):
 
         return smart_unicode(sql) % u_params
 
-    def last_insert_id(self, cursor, table_name, pk_name):
+    def last_insert_id(self, cursor, schema_name, table_name, pk_name):
         """
         Given a cursor object that has just performed an INSERT statement into
         a table that has an auto-incrementing ID, returns the newly created ID.
@@ -288,6 +289,20 @@ class BaseDatabaseOperations(object):
         not quote the given name if it's already been quoted.
         """
         raise NotImplementedError()
+
+    def prep_db_table(self, db_schema, db_table):
+        """
+        Prepares and formats the table name if necessary.
+        Just returns quoted db_table if not supported.
+        """
+        return self.quote_name(db_table)
+
+    def prep_db_index(self, db_schema, db_index):
+        """
+        Prepares and formats the table index name if necessary.
+        Just returns quoted db_index if not supported.
+        """
+        return self.quote_name(db_index)
 
     def random_function_sql(self):
         """
@@ -488,30 +503,72 @@ class BaseDatabaseIntrospection(object):
         return name
 
     def table_names(self):
-        "Returns a list of names of all tables that exist in the database."
+        "Returns a list of names of all tables that exist in the default schema."
         cursor = self.connection.cursor()
         return self.get_table_list(cursor)
 
+    def schema_name_converter(self, name):
+        """Apply a conversion to the name for the purposes of comparison.
+
+        The default schema name converter is for case sensitive comparison.
+        """
+        return name
+
+    def get_schema_list(self, cursor):
+        "Returns a list of schemas that exist in the database"
+        return []
+
+    def get_schema_table_list(self, cursor, schema):
+        "Returns a list of tables in a specific schema"
+        return []
+
+    def schema_names(self):
+        cursor = self.connection.cursor()
+        return self.get_schema_list(cursor)
+
+    def schema_table_names(self, schema):
+        "Returns a list of names of all tables that exist in the database schema."
+        cursor = self.connection.cursor()
+        return self.get_schema_table_list(cursor, schema)
+
     def django_table_names(self, only_existing=False):
         """
-        Returns a list of all table names that have associated Django models and
-        are in INSTALLED_APPS.
+        Returns a list of tuples containing all schema and table names that
+        have associated Django models and are in INSTALLED_APPS.
 
-        If only_existing is True, the resulting list will only include the tables
-        that actually exist in the database.
+        If only_existing is True, the resulting list will only include the
+        tables that actually exist in the database.
         """
         from django.db import models, router
         tables = set()
-        for app in models.get_apps():
-            for model in models.get_models(app):
-                if not model._meta.managed:
-                    continue
-                if not router.allow_syncdb(self.connection.alias, model):
-                    continue
-                tables.add(model._meta.db_table)
-                tables.update([f.m2m_db_table() for f in model._meta.local_many_to_many])
         if only_existing:
-            tables = [t for t in tables if self.table_name_converter(t) in self.table_names()]
+            existing_tables = set([('', tn) for tn in self.table_names()])
+            seen_schemas = set()
+        for model in models.get_models():
+            if not model._meta.managed:
+                continue
+            if not router.allow_syncdb(self.connection.alias, model):
+                continue
+            db_schema = model._meta.db_schema
+            if only_existing and db_schema and db_schema not in seen_schemas:
+                existing_tables.update([(db_schema, tn) for tn in
+                                        self.schema_table_names(db_schema)])
+                seen_schemas.add(db_schema)
+            tables.add((db_schema, model._meta.db_table))
+            m2m_tables = []
+            for f in model._meta.local_many_to_many:
+                m2m_schema = f.m2m_db_schema()
+                m2m_table = f.m2m_db_table()
+                if only_existing and m2m_schema and m2m_schema not in seen_schemas:
+                    existing_tables.update([(m2m_schema, tn) for tn in
+                                        self.schema_table_names(m2m_schema)])
+                    seen_schemas.add(m2m_schema)
+                m2m_tables.append((m2m_schema, m2m_table))
+            tables.update(m2m_tables)
+        if only_existing:
+            tables = [(s, t) for (s, t) in tables
+                      if (self.schema_name_converter(s),
+                          self.table_name_converter(t)) in existing_tables]
         return tables
 
     def installed_models(self, tables):
@@ -541,14 +598,19 @@ class BaseDatabaseIntrospection(object):
                     continue
                 for f in model._meta.local_fields:
                     if isinstance(f, models.AutoField):
-                        sequence_list.append({'table': model._meta.db_table, 'column': f.column})
+                        sequence_list.append({'table': model._meta.db_table,
+                                              'column': f.column,
+                                              'schema': model._meta.db_schema})
                         break # Only one AutoField is allowed per model, so don't bother continuing.
 
                 for f in model._meta.local_many_to_many:
+                    schema = f.m2m_db_schema()
                     # If this is an m2m using an intermediate table,
                     # we don't need to reset the sequence.
                     if f.rel.through is None:
-                        sequence_list.append({'table': f.m2m_db_table(), 'column': None})
+                        sequence_list.append({'table': f.m2m_db_table(),
+                                              'column': None,
+                                              'schema': schema})
 
         return sequence_list
 

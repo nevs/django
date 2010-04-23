@@ -131,6 +131,14 @@ class GenericRelation(RelatedField, Field):
     def m2m_reverse_name(self):
         return self.rel.to._meta.pk.column
 
+    def m2m_db_schema(self):
+        return self.rel.to._meta.db_schema
+
+    def m2m_qualified_name(self):
+        schema = self.m2m_db_schema()
+        table = self.m2m_db_table()
+        return connection.ops.prep_db_table(schema, table)
+
     def contribute_to_class(self, cls, name):
         super(GenericRelation, self).contribute_to_class(cls, name)
 

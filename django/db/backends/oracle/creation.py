@@ -39,9 +39,35 @@ class DatabaseCreation(BaseDatabaseCreation):
         'URLField':                     'VARCHAR2(%(max_length)s)',
     }
 
+    def sql_create_schema(self, schema, style, password=None,
+                          tablespace=None, temp_tablespace=None):
+        qn = self.connection.ops.quote_name
+        lock_account = (password is None)
+        if lock_account:
+            password = schema
+        output = []
+        output.append("%s %s %s %s" % (style.SQL_KEYWORD('CREATE USER'),
+                                       qn(schema),
+                                       style.SQL_KEYWORD('IDENTIFIED BY'),
+                                       qn(password)))
+        if tablespace:
+            output.append("%s %s" % (style.SQL_KEYWORD('DEFAULT TABLESPACE'),
+                                     qn(tablespace)))
+        if temp_tablespace:
+            output.append("%s %s" % (style.SQL_KEYWORD('TEMPORARY TABLESPACE'),
+                                     qn(temp_tablespace)))
+        if lock_account:
+            output.append(style.SQL_KEYWORD('ACCOUNT LOCK'))
+        return '\n'.join(output)
+
+    def sql_destroy_schema(self, schema, style):
+        qn = self.connection.ops.quote_name
+        return "%s %s %s" % (style.SQL_KEYWORD('DROP USER'), qn(schema),
+                             style.SQL_KEYWORD('CASCADE'))
+
     remember = {}
 
-    def _create_test_db(self, verbosity=1, autoclobber=False):
+    def _create_test_db(self, verbosity=1, autoclobber=False, schema):
         TEST_NAME = self._test_database_name()
         TEST_USER = self._test_database_user()
         TEST_PASSWD = self._test_database_passwd()
@@ -174,7 +200,7 @@ class DatabaseCreation(BaseDatabaseCreation):
                DEFAULT TABLESPACE %(tblspace)s
                TEMPORARY TABLESPACE %(tblspace_temp)s
             """,
-            """GRANT CONNECT, RESOURCE TO %(user)s""",
+            """GRANT CONNECT, RESOURCE, CREATE USER, DROP USER, CREATE ANY TABLE, ALTER ANY TABLE, CREATE ANY INDEX, CREATE ANY SEQUENCE, CREATE ANY TRIGGER, SELECT ANY TABLE, INSERT ANY TABLE, UPDATE ANY TABLE, DELETE ANY TABLE TO %(user)s""",
         ]
         self._execute_statements(cursor, statements, parameters, verbosity)
 

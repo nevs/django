@@ -63,3 +63,23 @@ class DatabaseCreation(BaseDatabaseCreation):
                 field.rel.to._meta.db_table, field.rel.to._meta.pk.column)
             ]
         return table_output, deferred
+
+    def default_schema(self):
+        return settings.DATABASE_NAME
+
+    def sql_create_schema(self, schema, style):
+        """
+        Returns the SQL required to create a single schema.
+        In MySQL schemas are synonymous to databases
+        """
+        qn = self.connection.ops.quote_name
+        output = "%s %s;" % (style.SQL_KEYWORD('CREATE DATABASE'), qn(schema))
+        return output
+
+    def sql_destroy_schema(self, schema, style):
+        """"
+        Returns the SQL required to destroy a single schema.
+        """
+        qn = self.connection.ops.quote_name
+        output = "%s %s;" % (style.SQL_KEYWORD('DROP DATABASE IF EXISTS'), qn(schema))
+        return output

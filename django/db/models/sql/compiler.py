@@ -21,7 +21,7 @@ class SQLCompiler(object):
         might not have all the pieces in place at that time.
         """
         if not self.query.tables:
-            self.query.join((None, self.query.model._meta.db_table, None, None))
+            self.query.join((None, self.query.model._meta.qualified_name, None, None))
         if (not self.query.select and self.query.default_cols and not
                 self.query.included_inherited_models):
             self.query.setup_inherited_models()
@@ -248,7 +248,7 @@ class SQLCompiler(object):
                         alias = start_alias
                     else:
                         link_field = opts.get_ancestor_link(model)
-                        alias = self.query.join((start_alias, model._meta.db_table,
+                        alias = self.query.join((start_alias, model._meta.qualified_name,
                                 link_field.column, model._meta.pk.column))
                     seen[model] = alias
             else:
@@ -449,7 +449,7 @@ class SQLCompiler(object):
                 result.append('%s%s%s' % (connector, qn(name), alias_str))
             first = False
         for t in self.query.extra_tables:
-            alias, unused = self.query.table_alias(t)
+            alias, unused = self.query.table_alias(qn(t))
             # Only add the alias if it's not already present (the table_alias()
             # calls increments the refcount, so an alias refcount of one means
             # this is the only reference.
@@ -529,7 +529,7 @@ class SQLCompiler(object):
             # what "used" specifies).
             avoid = avoid_set.copy()
             dupe_set = orig_dupe_set.copy()
-            table = f.rel.to._meta.db_table
+            table = f.rel.to._meta.qualified_name
             promote = nullable or f.null
             if model:
                 int_opts = opts
@@ -550,7 +550,7 @@ class SQLCompiler(object):
                                 ()))
                         dupe_set.add((opts, lhs_col))
                     int_opts = int_model._meta
-                    alias = self.query.join((alias, int_opts.db_table, lhs_col,
+                    alias = self.query.join((alias, int_opts.qualified_name, lhs_col,
                             int_opts.pk.column), exclusions=used,
                             promote=promote)
                     alias_chain.append(alias)
@@ -602,7 +602,7 @@ class SQLCompiler(object):
                 # what "used" specifies).
                 avoid = avoid_set.copy()
                 dupe_set = orig_dupe_set.copy()
-                table = model._meta.db_table
+                table = model._meta.qualified_name
 
                 int_opts = opts
                 alias = root_alias
@@ -625,7 +625,7 @@ class SQLCompiler(object):
                             dupe_set.add((opts, lhs_col))
                         int_opts = int_model._meta
                         alias = self.query.join(
-                            (alias, int_opts.db_table, lhs_col, int_opts.pk.column),
+                            (alias, int_opts.qualified_name, lhs_col, int_opts.pk.column),
                             exclusions=used, promote=True, reuse=used
                         )
                         alias_chain.append(alias)
@@ -766,13 +766,13 @@ class SQLInsertCompiler(SQLCompiler):
         # going to be column names (so we can avoid the extra overhead).
         qn = self.connection.ops.quote_name
         opts = self.query.model._meta
-        result = ['INSERT INTO %s' % qn(opts.db_table)]
+        result = ['INSERT INTO %s' % opts.qualified_name]
         result.append('(%s)' % ', '.join([qn(c) for c in self.query.columns]))
         values = [self.placeholder(*v) for v in self.query.values]
         result.append('VALUES (%s)' % ', '.join(values))
         params = self.query.params
         if self.return_id and self.connection.features.can_return_id_from_insert:
-            col = "%s.%s" % (qn(opts.db_table), qn(opts.pk.column))
+            col = "%s.%s" % (opts.qualified_name, qn(opts.pk.column))
             r_fmt, r_params = self.connection.ops.return_insert_id()
             result.append(r_fmt % col)
             params = params + r_params
@@ -786,7 +786,8 @@ class SQLInsertCompiler(SQLCompiler):
         if self.connection.features.can_return_id_from_insert:
             return self.connection.ops.fetch_returned_insert_id(cursor)
         return self.connection.ops.last_insert_id(cursor,
-                self.query.model._meta.db_table, self.query.model._meta.pk.column)
+                self.query.model._meta.db_schema, self.query.model._meta.db_table,
+                self.query.model._meta.pk.column)
 
 
 class SQLDeleteCompiler(SQLCompiler):

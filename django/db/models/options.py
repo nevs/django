@@ -21,7 +21,7 @@ get_verbose_name = lambda class_name: re.sub('(((?<=[a-z])[A-Z])|([A-Z](?![A-Z]|
 DEFAULT_NAMES = ('verbose_name', 'db_table', 'ordering',
                  'unique_together', 'permissions', 'get_latest_by',
                  'order_with_respect_to', 'app_label', 'db_tablespace',
-                 'abstract', 'managed', 'proxy', 'auto_created')
+                 'abstract', 'managed', 'proxy', 'auto_created', 'db_schema')
 
 class Options(object):
     def __init__(self, meta, app_label=None):
@@ -30,6 +30,8 @@ class Options(object):
         self.module_name, self.verbose_name = None, None
         self.verbose_name_plural = None
         self.db_table = ''
+        self.db_schema = settings.DATABASE_SCHEMA
+        self.qualified_name = ''
         self.ordering = []
         self.unique_together =  []
         self.permissions =  []
@@ -103,6 +105,12 @@ class Options(object):
         if not self.db_table:
             self.db_table = "%s_%s" % (self.app_label, self.module_name)
             self.db_table = truncate_name(self.db_table, connection.ops.max_name_length())
+        # Construct qualified table name.
+        self.qualified_name = connection.ops.prep_db_table(self.db_schema,
+                                                           self.db_table)
+        if self.qualified_name == connection.ops.quote_name(self.db_table):
+            # If unchanged, the backend doesn't support schemas.
+            self.db_schema = ''
 
     def _prepare(self, model):
         if self.order_with_respect_to:
@@ -177,6 +185,8 @@ class Options(object):
         self.pk = target._meta.pk
         self.proxy_for_model = target
         self.db_table = target._meta.db_table
+        self.db_schema = target._meta.db_schema
+        self.qualified_name = target._meta.qualified_name
 
     def __repr__(self):
         return '<Options for %s>' % self.object_name

@@ -38,7 +38,7 @@ class DeleteQuery(Query):
             field = self.model._meta.pk
             where.add((Constraint(None, field.column, field), 'in',
                     pk_list[offset : offset + GET_ITERATOR_CHUNK_SIZE]), AND)
-            self.do_query(self.model._meta.db_table, where, using=using)
+            self.do_query(self.model._meta.qualified_name, where, using=using)
 
 class UpdateQuery(Query):
     """
@@ -153,6 +153,7 @@ class InsertQuery(Query):
         }
         extras.update(kwargs)
         return super(InsertQuery, self).clone(klass, **extras)
+
 
     def insert_values(self, insert_values, raw_values=False):
         """

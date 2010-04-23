@@ -50,10 +50,11 @@ class DatabaseCreation(BaseDatabaseCreation):
                 tablespace_sql = ''
 
             def get_index_sql(index_name, opclass=''):
+                index_name = self.connection.ops.prep_db_index(model._meta.db_schema, index_name)
                 return (style.SQL_KEYWORD('CREATE INDEX') + ' ' +
-                        style.SQL_TABLE(qn(index_name)) + ' ' +
+                        style.SQL_TABLE(index_name) + ' ' +
                         style.SQL_KEYWORD('ON') + ' ' +
-                        style.SQL_TABLE(qn(db_table)) + ' ' +
+                        style.SQL_TABLE(model._meta.qualified_name) + ' ' +
                         "(%s%s)" % (style.SQL_FIELD(qn(f.column)), opclass) +
                         "%s;" % tablespace_sql)
 
